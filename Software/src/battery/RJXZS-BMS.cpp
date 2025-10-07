@@ -3,20 +3,100 @@
 #include "../communication/can/comm_can.h"
 #include "../datalayer/datalayer.h"
 #include "../devboard/utils/events.h"
+#include <limits>   // dla std::numeric_limits
+#include <cstring>
+
+// ── SOC Histeresis ─────────────────────
+static bool top_full_latched = false;
+static constexpr uint16_t SOC_TOP_LATCH_ON  = 9900; // 99.00%: lock „FULL”
+static constexpr uint16_t SOC_TOP_LATCH_OFF = 9850; // 98.50%: unlock „FULL”
+
+// ─── SOC from voltage lookup (Li-ion) + helpers ───
+namespace {
+  static const uint8_t kNumPts = 101;
+  static const uint16_t kSoc_pptt[kNumPts] = {
+    10000,9900,9800,9700,9600,9500,9400,9300,9200,9100,9000,8900,8800,8700,8600,
+     8500,8400,8300,8200,8100,8000,7900,7800,7700,7600,7500,7400,7300,7200,7100,
+     7000,6900,6800,6700,6600,6500,6400,6300,6200,6100,6000,5900,5800,5700,5600,
+     5500,5400,5300,5200,5100,5000,4900,4800,4700,4600,4500,4400,4300,4200,4100,
+     4000,3900,3800,3700,3600,3500,3400,3300,3200,3100,3000,2900,2800,2700,2600,
+     2500,2400,2300,2200,2100,2000,1900,1800,1700,1600,1500,1400,1300,1200,1100,
+     1000, 900, 800, 700, 600, 500, 400, 300, 200, 100, 0
+  };
+  static const uint16_t kCell_mV[kNumPts] = {F
+    4200,4173,4148,4124,4102,4080,4060,4041,4023,4007,3993,3980,3969,3959,3953,
+    3950,3941,3932,3924,3915,3907,3898,3890,3881,3872,3864,3855,3847,3838,3830,
+    3821,3812,3804,3795,3787,3778,3770,3761,3752,3744,3735,3727,3718,3710,3701,
+    3692,3684,3675,3667,3658,3650,3641,3632,3624,3615,3607,3598,3590,3581,3572,
+    3564,3555,3547,3538,3530,3521,3512,3504,3495,3487,3478,3470,3461,3452,3444,
+    3435,3427,3418,3410,3401,3392,3384,3375,3367,3358,3350,3338,3325,3313,3299,
+    3285,3271,3255,3239,3221,3202,3180,3156,3127,3090,3000
+  };
+
+  // Pack resistance
+  static const int PACK_INTERNAL_RESISTANCE_MOHM = 50;
+
+  static uint16_t soc_from_cell_mV(uint16_t cell_mV) {
+    if (cell_mV >= kCell_mV[0]) return kSoc_pptt[0];
+    if (cell_mV <= kCell_mV[kNumPts-1]) return kSoc_pptt[kNumPts-1];
+    for (uint8_t i=1;i<kNumPts;++i) if (cell_mV >= kCell_mV[i]) {
+      float t = float(cell_mV - kCell_mV[i]) / float(kCell_mV[i-1] - kCell_mV[i]);
+      uint16_t diff = kSoc_pptt[i-1] - kSoc_pptt[i];
+      return uint16_t(kSoc_pptt[i] + t*diff);
+    }
+    return 0;
+  }
+
+  // SOC estimation based on pack voltage [dV], cell count and current [dA]
+  static uint16_t soc_from_pack(uint16_t packVoltage_dV, uint16_t cellCount, int16_t current_dA) {
+    if (cellCount == 0) return 0;
+    int32_t pack_mV = int32_t(packVoltage_dV) * 100;
+    // Uwaga: V_OCV ≈ V_meas − I·R (ten sam wzór działa dla obu znaków prądu)
+    int32_t delta_mV = (int32_t(current_dA) * PACK_INTERNAL_RESISTANCE_MOHM) / 10; // dA→A
+    int32_t compensated_mV = pack_mV - delta_mV;
+    if (compensated_mV < 0) compensated_mV = 0;
+    uint16_t avg_cell_mV = uint16_t(compensated_mV / cellCount);
+    return soc_from_cell_mV(avg_cell_mV);
+  }
+} // namespace
 
 void RjxzsBms::update_values() {
 
-  datalayer.battery.status.real_soc = battery_capacity_percentage * 100;
-  if (battery_capacity_percentage == 0) {
-    //SOC% not available. Raise warning event if we go too long without SOC
-    timespent_without_soc++;
-    if (timespent_without_soc > FIVE_MINUTES) {
-      set_event(EVENT_SOC_UNAVAILABLE, 0);
-    }
-  } else {  //SOC is available, stop counting and clear error
-    timespent_without_soc = 0;
-    clear_event(EVENT_SOC_UNAVAILABLE);
+  // ── SOC MODE  ───────────────────────────────────────────────
+  uint16_t soc_pptt = 0;
+
+  // (1) SOC reported by BMS – UNCOMMENT to use:
+  // soc_pptt = uint16_t(battery_capacity_percentage) * 100;  // 0..10000
+
+  //(2) SOC from Cell Voltage – DEFAULT ENABLED:
+  {
+    //Determine the current BEFORE calculating SOC (as you write it to the datalayer below)
+    int16_t current_for_soc_dA = total_current;
+    if (discharging_active)      current_for_soc_dA = -total_current; // rozładowanie ujemne
+    else /* charging/unknown */  current_for_soc_dA =  total_current; // ładowanie dodatnie
+
+    // Count the current number of "live" cells (without waiting for the update of the populated_cellvoltages below)
+    uint16_t live_cells = 0;
+    for (int i = 0; i < MAX_AMOUNT_CELLS; ++i) if (cellvoltages[i] > 0) live_cells++;
+
+    uint16_t cellCount =
+        (datalayer.battery.info.number_of_cells > 0) ? datalayer.battery.info.number_of_cells
+                                                     : live_cells;
+    if (cellCount == 0) cellCount = 192; // default HV
+
+    soc_pptt = soc_from_pack(total_voltage, cellCount, current_for_soc_dA);
   }
+
+  datalayer.battery.status.real_soc = soc_pptt;
+
+  // ── Histeresis
+  if (!top_full_latched && datalayer.battery.status.real_soc >= SOC_TOP_LATCH_ON) {
+    top_full_latched = true;
+  } else if (top_full_latched && datalayer.battery.status.real_soc <= SOC_TOP_LATCH_OFF) {
+    top_full_latched = false;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
 
   datalayer.battery.status.remaining_capacity_Wh = static_cast<uint32_t>(
       (static_cast<double>(datalayer.battery.status.real_soc) / 10000) * datalayer.battery.info.total_capacity_Wh);
@@ -29,19 +109,19 @@ void RjxzsBms::update_values() {
     datalayer.battery.status.current_dA = total_current;
   } else if (discharging_active) {
     datalayer.battery.status.current_dA = -total_current;
-  } else {  //No direction data. Should never occur, but send current as charging, better than nothing
+  } else {  // No direction data. Better assume charging than nothing
     datalayer.battery.status.current_dA = total_current;
   }
 
-  // Charge power is manually set
-  if (datalayer.battery.status.real_soc > 9900) {
-    datalayer.battery.status.max_charge_power_W = MAX_CHARGE_POWER_WHEN_TOPBALANCING_W;
+  // ---Charging limits with hysteresis "full pack"
+  if (top_full_latched) {
+    // when "full" – stop or severely limit charging:
+    datalayer.battery.status.max_charge_power_W = MAX_CHARGE_POWER_WHEN_TOPBALANCING_W; // daj 0, jeśli chcesz total off
   } else if (datalayer.battery.status.real_soc > RAMPDOWN_SOC) {
-    // When real SOC is between RAMPDOWN_SOC-99%, ramp the value between Max<->0
     datalayer.battery.status.max_charge_power_W =
         datalayer.battery.status.override_charge_power_W *
         (1 - (datalayer.battery.status.real_soc - RAMPDOWN_SOC) / (10000.0 - RAMPDOWN_SOC));
-  } else {  // No limits, max charging power allowed
+  } else {
     datalayer.battery.status.max_charge_power_W = datalayer.battery.status.override_charge_power_W;
   }
 
