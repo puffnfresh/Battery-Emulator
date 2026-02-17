@@ -34,6 +34,8 @@ AsyncWebServer server(80);
 // Measure OTA progress
 unsigned long ota_progress_millis = 0;
 
+#include "api_json.h"
+
 #include "advanced_battery_html.h"
 #include "can_logging_html.h"
 #include "can_replay_html.h"
@@ -47,6 +49,338 @@ MyTimer ota_timeout_timer = MyTimer(15000);
 bool ota_active = false;
 
 const char get_firmware_info_html[] = R"rawliteral(%X%)rawliteral";
+
+static const char dashboard_html[] = R"rawliteral(<!doctype html><html><head>
+<meta charset="utf-8"><title>Battery Emulator</title>
+<meta name="viewport" content="width=device-width">
+<style>
+html{font-family:Arial;display:inline-block;text-align:center}
+h2{font-size:1.2em;margin:0.3em 0 0.5em 0}
+h4{margin:0.6em 0;line-height:1.2}
+body{max-width:800px;margin:0 auto;background:#000;color:#fff}
+button{background:#505E67;color:#fff;border:none;padding:10px 20px;margin-bottom:20px;cursor:pointer;border-radius:10px}
+button:hover{background:#3A4A52}
+.block{padding:10px;margin-bottom:10px;border-radius:50px}
+.info-block{background:#303E47}
+.proto-block{background:#333}
+.status-block{background:#333}
+.charger-block{background:#FF6E00}
+.bat-ok{background:#2D3F2F}
+.bat-warn{background:#F5CC00}
+.bat-error{background:#A70107}
+.bat-updating{background:#2B35AF}
+.bat-flex{display:flex;width:100%}
+.bat-flex>.bat-block{flex:1}
+.tooltip .tooltiptext{visibility:hidden;width:200px;background:#3A4A52;color:#fff;text-align:center;border-radius:6px;padding:8px;position:absolute;z-index:1;margin-left:-100px;opacity:0;transition:opacity 0.3s;font-size:0.9em;font-weight:normal;line-height:1.4}
+.tooltip:hover .tooltiptext{visibility:visible;opacity:1}
+.tooltip-icon{color:#505E67;cursor:help}
+#bat2-block,#bat3-block{display:none}
+</style>
+</head><body>
+<h2>Battery Emulator</h2>
+
+<div class="block info-block">
+ <h4 id="sw-hw"></h4>
+ <h4 id="uptime"></h4>
+ <h4 id="wifi-info"></h4>
+ <h4 id="wifi-extra"></h4>
+</div>
+
+<div id="proto-block" class="block proto-block" style="display:none">
+ <h4 id="proto-inverter" style="color:white;display:none"></h4>
+ <h4 id="proto-battery" style="color:white;display:none"></h4>
+ <h4 id="proto-shunt" style="color:white;display:none"></h4>
+ <h4 id="proto-charger" style="color:white;display:none"></h4>
+</div>
+
+<div id="bat-container">
+ <div id="bat1-block" class="block bat-ok" style="display:none">
+  <h4 id="bat1-soc" style="color:white"></h4>
+  <h4 id="bat1-soh" style="color:white"></h4>
+  <h4 id="bat1-vi" style="color:white"></h4>
+  <h4 id="bat1-power" style="color:white"></h4>
+  <h4 id="bat1-totalcap" style="color:white"></h4>
+  <h4 id="bat1-remcap" style="color:white"></h4>
+  <h4 id="bat1-maxdischg" style="color:white"></h4>
+  <h4 id="bat1-maxchg" style="color:white"></h4>
+  <h4 id="bat1-maxdischg-i" style="color:white"></h4>
+  <h4 id="bat1-maxchg-i" style="color:white"></h4>
+  <h4 id="bat1-cells"></h4>
+  <h4 id="bat1-delta"></h4>
+  <h4 id="bat1-temps"></h4>
+  <h4 id="bat1-status"></h4>
+  <h4 id="bat1-real-bms" style="display:none"></h4>
+  <h4 id="bat1-activity"></h4>
+ </div>
+
+ <div id="bat2-block" class="block bat-ok" style="display:none">
+  <h4 id="bat2-soc" style="color:white"></h4>
+  <h4 id="bat2-soh" style="color:white"></h4>
+  <h4 id="bat2-vi" style="color:white"></h4>
+  <h4 id="bat2-power" style="color:white"></h4>
+  <h4 id="bat2-totalcap" style="color:white"></h4>
+  <h4 id="bat2-remcap" style="color:white"></h4>
+  <h4 id="bat2-maxdischg" style="color:white"></h4>
+  <h4 id="bat2-maxchg" style="color:white"></h4>
+  <h4 id="bat2-maxdischg-i" style="color:white"></h4>
+  <h4 id="bat2-maxchg-i" style="color:white"></h4>
+  <h4 id="bat2-cells"></h4>
+  <h4 id="bat2-delta"></h4>
+  <h4 id="bat2-temps"></h4>
+  <h4 id="bat2-status"></h4>
+  <h4 id="bat2-activity"></h4>
+ </div>
+
+ <div id="bat3-block" class="block bat-ok" style="display:none">
+  <h4 id="bat3-soc" style="color:white"></h4>
+  <h4 id="bat3-soh" style="color:white"></h4>
+  <h4 id="bat3-vi" style="color:white"></h4>
+  <h4 id="bat3-power" style="color:white"></h4>
+  <h4 id="bat3-totalcap" style="color:white"></h4>
+  <h4 id="bat3-remcap" style="color:white"></h4>
+  <h4 id="bat3-maxdischg" style="color:white"></h4>
+  <h4 id="bat3-maxchg" style="color:white"></h4>
+  <h4 id="bat3-maxdischg-i" style="color:white"></h4>
+  <h4 id="bat3-maxchg-i" style="color:white"></h4>
+  <h4 id="bat3-cells"></h4>
+  <h4 id="bat3-delta"></h4>
+  <h4 id="bat3-temps"></h4>
+  <h4 id="bat3-status"></h4>
+  <h4 id="bat3-activity"></h4>
+ </div>
+</div>
+
+<div class="block status-block">
+ <h4 id="pause-status"></h4>
+ <h4 id="contactor-info"></h4>
+ <h4 id="bat2-join" style="display:none"></h4>
+ <div id="contactor-detail"></div>
+</div>
+
+<div id="charger-block" class="block charger-block" style="display:none">
+ <h4 id="chg-hv-en"></h4>
+ <h4 id="chg-aux-en"></h4>
+ <h4 id="chg-power" style="color:white"></h4>
+ <h4 id="chg-eff" style="color:white;display:none"></h4>
+ <h4 id="chg-hvdc-v" style="color:white"></h4>
+ <h4 id="chg-hvdc-i" style="color:white"></h4>
+ <h4 id="chg-lvdc-i" style="color:white"></h4>
+ <h4 id="chg-lvdc-v" style="color:white"></h4>
+ <h4 id="chg-ac-v" style="color:white"></h4>
+ <h4 id="chg-ac-i" style="color:white"></h4>
+</div>
+
+<div id="buttons"></div>
+
+<script>
+var statusBMS=[,"INACTIVE","DARKSTART","OK","FAULT","UPDATING","STANDBY"];
+statusBMS[0]="STANDBY";
+var realBMS=["DISCONNECTED","STANDBY","OK","FAULT"];
+var pauseNames=["Normal","Pausing...","Paused","Resuming..."];
+var emulatorColors=["#2D3F2F","#F5CC00","#A70107","#2B35AF"];
+var hasBat2=false,hasBat3=false,hasCharger=false;
+var infoData=null,isPaused=false,equipStop=false;
+
+function fmtPower(w,unit){
+ unit=unit||"";
+ if(w>=1000||w<=-1000) return (w/1000).toFixed(1)+" kW"+unit;
+ return w.toFixed(0)+" W"+unit;
+}
+
+function uptimeStr(s){
+ var d=Math.floor(s/86400);s%=86400;
+ var h=Math.floor(s/3600);s%=3600;
+ var m=Math.floor(s/60);s%=60;
+ return d+" days, "+h+" hours, "+m+" minutes, "+s+" seconds";
+}
+
+function updateBatBlock(prefix,bat,eStatus,eqStop){
+ var el=document.getElementById(prefix+"-block");
+ if(!bat){el.style.display="none";return;}
+ el.style.display="";
+ var color=emulatorColors[eStatus]||"#2D3F2F";
+ if(prefix!="bat1") color=(bat.bms_status==3)?"#2D3F2F":(bat.bms_status==4)?"#A70107":"#2D3F2F";
+ el.style.backgroundColor=color;
+
+ if(bat.soc_scaling_active)
+  document.getElementById(prefix+"-soc").textContent="Scaled SOC: "+bat.soc_reported.toFixed(2)+"% (real: "+bat.soc_real.toFixed(2)+"%)";
+ else
+  document.getElementById(prefix+"-soc").textContent="SOC: "+bat.soc_real.toFixed(2)+"%";
+ document.getElementById(prefix+"-soh").textContent="SOH: "+bat.soh.toFixed(2)+"%";
+ document.getElementById(prefix+"-vi").textContent="Voltage: "+bat.voltage_V.toFixed(1)+" V \u00a0 Current: "+bat.current_A.toFixed(1)+" A";
+ document.getElementById(prefix+"-power").textContent="Power: "+fmtPower(bat.power_W);
+
+ if(bat.soc_scaling_active){
+  document.getElementById(prefix+"-totalcap").textContent="Scaled total capacity: "+fmtPower(bat.reported_total_capacity_Wh,"h")+" (real: "+fmtPower(bat.total_capacity_Wh,"h")+")";
+  document.getElementById(prefix+"-remcap").textContent="Scaled remaining capacity: "+fmtPower(bat.reported_remaining_capacity_Wh,"h")+" (real: "+fmtPower(bat.remaining_capacity_Wh,"h")+")";
+ } else {
+  document.getElementById(prefix+"-totalcap").textContent="Total capacity: "+fmtPower(bat.total_capacity_Wh,"h");
+  document.getElementById(prefix+"-remcap").textContent="Remaining capacity: "+fmtPower(bat.remaining_capacity_Wh,"h");
+ }
+
+ var dpc=eqStop?"red":"white";
+ var dp=document.getElementById(prefix+"-maxdischg");
+ dp.textContent="Max discharge power: "+fmtPower(bat.max_discharge_power_W);dp.style.color=dpc;
+ var cp=document.getElementById(prefix+"-maxchg");
+ cp.textContent="Max charge power: "+fmtPower(bat.max_charge_power_W);cp.style.color=dpc;
+ var di=document.getElementById(prefix+"-maxdischg-i");
+ di.textContent="Max discharge current: "+bat.max_discharge_current_A.toFixed(1)+" A";di.style.color=dpc;
+ var ci=document.getElementById(prefix+"-maxchg-i");
+ ci.textContent="Max charge current: "+bat.max_charge_current_A.toFixed(1)+" A";ci.style.color=dpc;
+
+ var delta=bat.cell_max_mV-bat.cell_min_mV;
+ document.getElementById(prefix+"-cells").textContent="Cell min/max: "+bat.cell_min_mV+" mV / "+bat.cell_max_mV+" mV";
+ var de=document.getElementById(prefix+"-delta");
+ de.textContent="Cell delta: "+delta+" mV";de.style.color=(delta>500)?"red":"";
+ document.getElementById(prefix+"-temps").textContent="Temperature min/max: "+bat.temp_min_C.toFixed(1)+" \u00b0C / "+bat.temp_max_C.toFixed(1)+" \u00b0C";
+ document.getElementById(prefix+"-status").textContent="System status: "+(statusBMS[bat.bms_status]||"??");
+
+ var act;
+ if(bat.current_A==0) act="Battery idle";
+ else if(bat.current_A<0) act="Battery discharging!";
+ else act="Battery charging!";
+ document.getElementById(prefix+"-activity").textContent=act;
+}
+
+function updateStatus(d){
+ var sys=d.system;
+ equipStop=sys.equipment_stop;
+ isPaused=(sys.pause_status==2);
+ document.getElementById("uptime").textContent="Uptime: "+uptimeStr(sys.uptime_s);
+
+ updateBatBlock("bat1",d.battery,sys.emulator_status,equipStop);
+
+ hasBat2=!!d.battery2;
+ hasBat3=!!d.battery3;
+ hasCharger=!!d.charger;
+
+ if(hasBat2){
+  document.getElementById("bat2-block").style.display="";
+  updateBatBlock("bat2",d.battery2,sys.emulator_status,equipStop);
+ }
+ if(hasBat3){
+  document.getElementById("bat3-block").style.display="";
+  updateBatBlock("bat3",d.battery3,sys.emulator_status,equipStop);
+ }
+
+ // Multi-battery flex layout
+ var container=document.getElementById("bat-container");
+ if(hasBat2){
+  container.style.display="flex";container.style.width="100%";
+  var kids=container.children;for(var i=0;i<kids.length;i++)kids[i].style.flex="1";
+ } else {
+  container.style.display="";
+  var kids=container.children;for(var i=0;i<kids.length;i++)kids[i].style.flex="";
+ }
+
+ // Pause status
+ var pe=document.getElementById("pause-status");
+ pe.textContent="Power status: "+pauseNames[sys.pause_status];
+ pe.style.color=(sys.pause_status==0)?"":"red";
+
+ // Contactor info
+ var ci="Emulator allows contactor closing: ";
+ ci+=(d.battery&&d.battery.bms_status==4)?"\u2717":"\u2713";
+ ci+=" Inverter allows contactor closing: \u2713";
+ document.getElementById("contactor-info").innerHTML=ci;
+
+ if(hasBat2){
+  var j2=document.getElementById("bat2-join");
+  j2.style.display="";
+  j2.textContent="Secondary battery allowed to join \u2713";
+ }
+
+ // Contactor detail
+ var cd=document.getElementById("contactor-detail");
+ cd.innerHTML="<h4>Contactors state: "+
+  (sys.contactors_engaged==0?"<span style='color:red'>OFF (DISCONNECTED)</span>":
+   sys.contactors_engaged==1?"<span style='color:green'>ON</span>":
+   sys.contactors_engaged==2?"<span style='color:red'>OFF (FAULT)</span>":
+   sys.contactors_engaged==3?"<span style='color:orange'>PRECHARGE</span>":"")+"</h4>";
+
+ // Charger block
+ if(d.charger){
+  var cb=document.getElementById("charger-block");cb.style.display="";
+  document.getElementById("chg-hv-en").innerHTML="Charger HV Enabled: "+(d.charger.HV_enabled?"\u2713":"<span style='color:red'>\u2717</span>");
+  document.getElementById("chg-aux-en").innerHTML="Charger Aux12v Enabled: "+(d.charger.aux12V_enabled?"\u2713":"<span style='color:red'>\u2717</span>");
+  document.getElementById("chg-power").textContent="Charger Output Power: "+fmtPower(d.charger.output_power_W);
+  if(d.charger.efficiency_pct!=null){var ee=document.getElementById("chg-eff");ee.style.display="";ee.textContent="Charger Efficiency: "+d.charger.efficiency_pct.toFixed(0)+"%";}
+  document.getElementById("chg-hvdc-v").textContent="Charger HVDC Output V: "+d.charger.HVDC_voltage_V.toFixed(2)+" V";
+  document.getElementById("chg-hvdc-i").textContent="Charger HVDC Output I: "+d.charger.HVDC_current_A.toFixed(2)+" A";
+  document.getElementById("chg-lvdc-i").textContent="Charger LVDC Output I: "+d.charger.LVDC_current_A.toFixed(2);
+  document.getElementById("chg-lvdc-v").textContent="Charger LVDC Output V: "+d.charger.LVDC_voltage_V.toFixed(2);
+  document.getElementById("chg-ac-v").textContent="Charger AC Input V: "+d.charger.AC_voltage_V.toFixed(2)+" VAC";
+  document.getElementById("chg-ac-i").textContent="Charger AC Input I: "+d.charger.AC_current_A.toFixed(2)+" A";
+ }
+
+ // Buttons
+ renderButtons();
+}
+
+function renderButtons(){
+ var b="";
+ if(isPaused)
+  b+="<button onclick='PauseBattery(false)'>Resume charge/discharge</button> ";
+ else
+  b+="<button onclick=\"if(confirm('Are you sure you want to pause charging and discharging? This will set the maximum charge and discharge values to zero, preventing any further power flow.')) { PauseBattery(true); }\">Pause charge/discharge</button> ";
+ b+="<button onclick='go(\"/update\")'>Perform OTA update</button> ";
+ b+="<button onclick='go(\"/settings\")'>Change Settings</button> ";
+ b+="<button onclick='go(\"/advanced\")'>More Battery Info</button> ";
+ b+="<button onclick='go(\"/canlog\")'>CAN logger</button> ";
+ b+="<button onclick='go(\"/canreplay\")'>CAN replay</button> ";
+ b+="<button onclick='go(\"/cellmonitor\")'>Cellmonitor</button> ";
+ b+="<button onclick='go(\"/events\")'>Events</button> ";
+ b+="<button onclick='askReboot()'>Reboot Emulator</button>";
+ if(!equipStop)
+  b+="<br/><button style='background:red;color:white;cursor:pointer' onclick=\"if(confirm('This action will attempt to open contactors on the battery. Are you sure?')){estop(true)}\">Open Contactors</button><br/>";
+ else
+  b+="<br/><button style='background:green;color:white;cursor:pointer' onclick=\"if(confirm('This action will attempt to close contactors and enable power transfer. Are you sure?')){estop(false)}\">Close Contactors</button><br/>";
+ document.getElementById("buttons").innerHTML=b;
+}
+
+function updateInfo(d){
+ infoData=d;
+ var t="Software: "+d.firmware+" Hardware: "+d.hardware+" @ "+d.cpu_temp_C.toFixed(1)+" \u00b0C";
+ document.getElementById("sw-hw").textContent=t;
+
+ var protoBlock=document.getElementById("proto-block");
+ var hasProto=false;
+ if(d.inverter_protocol){document.getElementById("proto-inverter").style.display="";document.getElementById("proto-inverter").textContent="Inverter protocol: "+d.inverter_protocol;hasProto=true;}
+ if(d.battery_protocol){document.getElementById("proto-battery").style.display="";document.getElementById("proto-battery").textContent="Battery protocol: "+d.battery_protocol;hasProto=true;}
+ if(d.shunt_protocol){document.getElementById("proto-shunt").style.display="";document.getElementById("proto-shunt").textContent="Shunt protocol: "+d.shunt_protocol;hasProto=true;}
+ if(d.charger_protocol){document.getElementById("proto-charger").style.display="";document.getElementById("proto-charger").textContent="Charger protocol: "+d.charger_protocol;hasProto=true;}
+ if(hasProto) protoBlock.style.display="";
+
+ var wi="SSID: "+(d.wifi_ssid||"");
+ if(d.wifi_rssi!=null) wi+=" RSSI:"+d.wifi_rssi+" dBm";
+ document.getElementById("wifi-info").textContent=wi;
+ if(d.wifi_ip){
+  var ex="";
+  if(d.wifi_hostname) ex+="Hostname: "+d.wifi_hostname+" ";
+  ex+="IP: "+d.wifi_ip;
+  document.getElementById("wifi-extra").textContent=ex;
+ }
+}
+
+function go(url){window.location.href=url;}
+function askReboot(){if(confirm('Are you sure you want to reboot the emulator? NOTE: If emulator is handling contactors, they will open during reboot!'))reboot();}
+function reboot(){var x=new XMLHttpRequest();x.open('GET','/reboot',true);x.send();setTimeout(function(){window.location="/";},3000);}
+function PauseBattery(p){var x=new XMLHttpRequest();x.onload=function(){fetchStatus();};x.open('GET','/pause?value='+p,true);x.send();}
+function estop(s){var x=new XMLHttpRequest();x.onload=function(){fetchStatus();};x.open('GET','/equipmentStop?value='+s,true);x.send();}
+
+function fetchStatus(){
+ fetch('/api/status').then(function(r){return r.json();}).then(updateStatus).catch(function(e){console.log('status err',e);});
+}
+function fetchInfo(){
+ fetch('/api/info').then(function(r){return r.json();}).then(updateInfo).catch(function(e){console.log('info err',e);});
+}
+
+fetchInfo();
+fetchStatus();
+setInterval(fetchStatus,5000);
+setInterval(fetchInfo,60000);
+</script>
+</body></html>)rawliteral";
 
 String importedLogs = "";      // Store the uploaded logfile contents in RAM
 bool isReplayRunning = false;  // Global flag to track replay state
@@ -188,11 +522,11 @@ void init_webserver() {
     request->send(200, "application/json", get_firmware_info_html, get_firmware_info_processor);
   });
 
-  // Route for root / web page
+  // Route for root / web page - static dashboard with JS fetch from /api/*
   def_route_with_auth("/", server, HTTP_GET, [](AsyncWebServerRequest* request) {
     // Clear OTA active flag as a safeguard in case onOTAEnd() wasn't called
     ota_active = false;
-    request->send(200, "text/html", index_html, processor);
+    request->send(200, "text/html", dashboard_html);
   });
 
   // Route for going to settings web page
@@ -367,12 +701,12 @@ void init_webserver() {
 
   // Route for going to cellmonitor web page
   def_route_with_auth("/cellmonitor", server, HTTP_GET, [](AsyncWebServerRequest* request) {
-    request->send(200, "text/html", index_html, cellmonitor_processor);
+    request->send(200, "text/html", cellmonitor_html);
   });
 
   // Route for going to event log web page
   def_route_with_auth("/events", server, HTTP_GET, [](AsyncWebServerRequest* request) {
-    request->send(200, "text/html", index_html, events_processor);
+    request->send(200, "text/html", events_html);
   });
 
   // Route for clearing all events
@@ -710,6 +1044,9 @@ void init_webserver() {
     ESP.restart();
   });
 
+  // Register JSON API routes
+  register_api_routes(server);
+
   // Initialize ElegantOTA
   init_ElegantOTA();
 
@@ -789,734 +1126,6 @@ String get_uptime() {
 
   return (String)total_days + " days, " + (String)remaining_hours + " hours, " + (String)remaining_minutes +
          " minutes, " + (String)remaining_seconds + " seconds";
-}
-
-String processor(const String& var) {
-  if (var == "X") {
-    String content = "";
-    content += "<style>";
-    content += "body { background-color: black; color: white; }";
-    content +=
-        "button { background-color: #505E67; color: white; border: none; padding: 10px 20px; margin-bottom: 20px; "
-        "cursor: pointer; border-radius: 10px; }";
-    content += "button:hover { background-color: #3A4A52; }";
-    content += "h2 { font-size: 1.2em; margin: 0.3em 0 0.5em 0; }";
-    content += "h4 { margin: 0.6em 0; line-height: 1.2; }";
-    //content += ".tooltip { position: relative; display: inline-block; }";
-    content += ".tooltip .tooltiptext {";
-    content += "  visibility: hidden;";
-    content += "  width: 200px;";
-    content += "  background-color: #3A4A52;";  // Matching your button hover color
-    content += "  color: white;";
-    content += "  text-align: center;";
-    content += "  border-radius: 6px;";
-    content += "  padding: 8px;";
-    content += "  position: absolute;";
-    content += "  z-index: 1;";
-    content += "  margin-left: -100px;";
-    content += "  opacity: 0;";
-    content += "  transition: opacity 0.3s;";
-    content += "  font-size: 0.9em;";
-    content += "  font-weight: normal;";
-    content += "  line-height: 1.4;";
-    content += "}";
-    content += ".tooltip:hover .tooltiptext { visibility: visible; opacity: 1; }";
-    content += ".tooltip-icon { color: #505E67; cursor: help; }";  // Matching your button color
-    content += "</style>";
-
-    // Compact header
-    content += "<h2>Battery Emulator</h2>";
-
-    // Start content block
-    content += "<div style='background-color: #303E47; padding: 10px; margin-bottom: 10px; border-radius: 50px'>";
-    content += "<h4>Software: " + String(version_number);
-
-// Show hardware used:
-#ifdef HW_LILYGO
-    content += " Hardware: LilyGo T-CAN485";
-#endif  // HW_LILYGO
-#ifdef HW_LILYGO2CAN
-    content += " Hardware: LilyGo T_2CAN";
-#endif  // HW_LILYGO2CAN
-#ifdef HW_BECOM
-    content += " Hardware: BECom";
-#endif  // HW_BECOM
-#ifdef HW_STARK
-    content += " Hardware: Stark CMR Module";
-#endif  // HW_STARK
-    content += " @ " + String(datalayer.system.info.CPU_temperature, 1) + " &deg;C</h4>";
-    content += "<h4>Uptime: " + get_uptime() + "</h4>";
-    if (datalayer.system.info.performance_measurement_active) {
-      content +=
-          "<h4>Free heap: " + String(ESP.getFreeHeap()) + ", max alloc: " + String(ESP.getMaxAllocHeap()) + "</h4>";
-      FlashMode_t mode = ESP.getFlashChipMode();
-      content += "<h4>Flash mode: " +
-                 String(mode == FM_QIO    ? "QIO"
-                        : mode == FM_QOUT ? "QOUT"
-                        : mode == FM_DIO  ? "DIO"
-                        : mode == FM_DOUT ? "DOUT"
-                                          : /*mode == FM_UNKNOWN*/ "Unknown") +
-                 ", size: " + String(ESP.getFlashChipSize() / (1024 * 1024)) + " MB</h4>";
-      // Load information
-      content += "<h4>Core task max load: " + String(datalayer.system.status.core_task_max_us) + " us</h4>";
-      content +=
-          "<h4>Core task max load last 10 s: " + String(datalayer.system.status.core_task_10s_max_us) + " us</h4>";
-      content +=
-          "<h4>MQTT function (MQTT task) max load last 10 s: " + String(datalayer.system.status.mqtt_task_10s_max_us) +
-          " us</h4>";
-      content +=
-          "<h4>WIFI function (MQTT task) max load last 10 s: " + String(datalayer.system.status.wifi_task_10s_max_us) +
-          " us</h4>";
-      content += "<h4>Max load @ worst case execution of core task:</h4>";
-      content += "<h4>10ms function timing: " + String(datalayer.system.status.time_snap_10ms_us) + " us</h4>";
-      content += "<h4>Values function timing: " + String(datalayer.system.status.time_snap_values_us) + " us</h4>";
-      content += "<h4>CAN/serial RX function timing: " + String(datalayer.system.status.time_snap_comm_us) + " us</h4>";
-      content += "<h4>CAN TX function timing: " + String(datalayer.system.status.time_snap_cantx_us) + " us</h4>";
-      content += "<h4>OTA function timing: " + String(datalayer.system.status.time_snap_ota_us) + " us</h4>";
-    }
-
-    wl_status_t status = WiFi.status();
-    // Display ssid of network connected to and, if connected to the WiFi, its own IP
-    content += "<h4>SSID: " + html_escape(ssid.c_str());
-    if (status == WL_CONNECTED) {
-      // Get and display the signal strength (RSSI) and channel
-      content += " RSSI:" + String(WiFi.RSSI()) + " dBm Ch: " + String(WiFi.channel());
-    }
-    content += "</h4>";
-    if (status == WL_CONNECTED) {
-      content += "<h4>Hostname: " + html_escape(WiFi.getHostname()) + "</h4>";
-      content += "<h4>IP: " + WiFi.localIP().toString() + "</h4>";
-    } else {
-      content += "<h4>Wifi state: " + getConnectResultString(status) + "</h4>";
-    }
-    // Close the block
-    content += "</div>";
-
-    if (inverter || battery || charger || user_selected_shunt_type != ShuntType::None) {
-      // Start a new block with a specific background color
-      content += "<div style='background-color: #333; padding: 10px; margin-bottom: 10px; border-radius: 50px'>";
-
-      // Display which components are used
-      if (inverter) {
-        content += "<h4 style='color: white;'>Inverter protocol: ";
-        content += inverter->name();
-        content += " ";
-        content += datalayer.system.info.inverter_brand;
-        content += "</h4>";
-      }
-
-      if (battery) {
-        content += "<h4 style='color: white;'>Battery protocol: ";
-        content += datalayer.system.info.battery_protocol;
-        if (battery3) {
-          content += " (Triple battery)";
-        } else if (battery2) {
-          content += " (Double battery)";
-        }
-        if (datalayer.battery.info.chemistry == battery_chemistry_enum::LFP) {
-          content += " (LFP)";
-        }
-        content += "</h4>";
-      }
-
-      if (user_selected_shunt_type != ShuntType::None) {
-        content += "<h4 style='color: white;'>Shunt protocol: ";
-        content += datalayer.system.info.shunt_protocol;
-        content += "</h4>";
-      }
-
-      if (charger) {
-        content += "<h4 style='color: white;'>Charger protocol: ";
-        content += charger->name();
-        content += "</h4>";
-      }
-
-      // Close the block
-      content += "</div>";
-    }
-
-    if (battery) {
-      if (battery2) {
-        // Start a new block with a specific background color. Color changes depending on BMS status
-        content += "<div style='display: flex; width: 100%;'>";
-        content += "<div style='flex: 1; background-color: ";
-      } else {
-        // Start a new block with a specific background color. Color changes depending on system status
-        content += "<div style='background-color: ";
-      }
-
-      switch (get_emulator_status()) {
-        case EMULATOR_STATUS::STATUS_OK:
-          content += "#2D3F2F;";
-          break;
-        case EMULATOR_STATUS::STATUS_WARNING:
-          content += "#F5CC00;";
-          break;
-        case EMULATOR_STATUS::STATUS_ERROR:
-          content += "#A70107;";
-          break;
-        case EMULATOR_STATUS::STATUS_UPDATING:
-          content += "#2B35AF;";  // Blue in test mode
-          break;
-      }
-
-      // Add the common style properties
-      content += "padding: 10px; margin-bottom: 10px; border-radius: 50px;'>";
-
-      // Display battery statistics within this block
-      float socRealFloat =
-          static_cast<float>(datalayer.battery.status.real_soc) / 100.0f;  // Convert to float and divide by 100
-      float socScaledFloat =
-          static_cast<float>(datalayer.battery.status.reported_soc) / 100.0f;  // Convert to float and divide by 100
-      float sohFloat =
-          static_cast<float>(datalayer.battery.status.soh_pptt) / 100.0f;  // Convert to float and divide by 100
-      float voltageFloat =
-          static_cast<float>(datalayer.battery.status.voltage_dV) / 10.0f;  // Convert to float and divide by 10
-      float currentFloat =
-          static_cast<float>(datalayer.battery.status.current_dA) / 10.0f;  // Convert to float and divide by 10
-      float powerFloat = static_cast<float>(datalayer.battery.status.active_power_W);                // Convert to float
-      float tempMaxFloat = static_cast<float>(datalayer.battery.status.temperature_max_dC) / 10.0f;  // Convert to float
-      float tempMinFloat = static_cast<float>(datalayer.battery.status.temperature_min_dC) / 10.0f;  // Convert to float
-      float maxCurrentChargeFloat =
-          static_cast<float>(datalayer.battery.status.max_charge_current_dA) / 10.0f;  // Convert to float
-      float maxCurrentDischargeFloat =
-          static_cast<float>(datalayer.battery.status.max_discharge_current_dA) / 10.0f;  // Convert to float
-      uint16_t cell_delta_mv =
-          datalayer.battery.status.cell_max_voltage_mV - datalayer.battery.status.cell_min_voltage_mV;
-
-      if (datalayer.battery.settings.soc_scaling_active)
-        content += "<h4 style='color: white;'>Scaled SOC: " + String(socScaledFloat, 2) +
-                   "&percnt; (real: " + String(socRealFloat, 2) + "&percnt;)</h4>";
-      else
-        content += "<h4 style='color: white;'>SOC: " + String(socRealFloat, 2) + "&percnt;</h4>";
-
-      content += "<h4 style='color: white;'>SOH: " + String(sohFloat, 2) + "&percnt;</h4>";
-      content += "<h4 style='color: white;'>Voltage: " + String(voltageFloat, 1) +
-                 " V &nbsp; Current: " + String(currentFloat, 1) + " A</h4>";
-      content += formatPowerValue("Power", powerFloat, "", 1);
-
-      if (datalayer.battery.settings.soc_scaling_active)
-        content += "<h4 style='color: white;'>Scaled total capacity: " +
-                   formatPowerValue(datalayer.battery.info.reported_total_capacity_Wh, "h", 1) +
-                   " (real: " + formatPowerValue(datalayer.battery.info.total_capacity_Wh, "h", 1) + ")</h4>";
-      else
-        content += formatPowerValue("Total capacity", datalayer.battery.info.total_capacity_Wh, "h", 1);
-
-      if (datalayer.battery.settings.soc_scaling_active)
-        content += "<h4 style='color: white;'>Scaled remaining capacity: " +
-                   formatPowerValue(datalayer.battery.status.reported_remaining_capacity_Wh, "h", 1) +
-                   " (real: " + formatPowerValue(datalayer.battery.status.remaining_capacity_Wh, "h", 1) + ")</h4>";
-      else
-        content += formatPowerValue("Remaining capacity", datalayer.battery.status.remaining_capacity_Wh, "h", 1);
-
-      if (datalayer.system.info.equipment_stop_active) {
-        content +=
-            formatPowerValue("Max discharge power", datalayer.battery.status.max_discharge_power_W, "", 1, "red");
-        content += formatPowerValue("Max charge power", datalayer.battery.status.max_charge_power_W, "", 1, "red");
-        content += "<h4 style='color: red;'>Max discharge current: " + String(maxCurrentDischargeFloat, 1) + " A</h4>";
-        content += "<h4 style='color: red;'>Max charge current: " + String(maxCurrentChargeFloat, 1) + " A</h4>";
-      } else {
-        content += formatPowerValue("Max discharge power", datalayer.battery.status.max_discharge_power_W, "", 1);
-        content += formatPowerValue("Max charge power", datalayer.battery.status.max_charge_power_W, "", 1);
-        content += "<h4 style='color: white;'>Max discharge current: " + String(maxCurrentDischargeFloat, 1) + " A";
-        if (datalayer.battery.settings.remote_settings_limit_discharge) {
-          content += " (Remote)</h4>";
-        } else if (datalayer.battery.settings.user_settings_limit_discharge) {
-          content += " (Manual)</h4>";
-        } else {
-          content += " (BMS)</h4>";
-        }
-        content += "<h4 style='color: white;'>Max charge current: " + String(maxCurrentChargeFloat, 1) + " A";
-        if (datalayer.battery.settings.remote_settings_limit_charge) {
-          content += " (Remote)</h4>";
-        } else if (datalayer.battery.settings.user_settings_limit_charge) {
-          content += " (Manual)</h4>";
-        } else {
-          content += " (BMS)</h4>";
-        }
-      }
-
-      content += "<h4>Cell min/max: " + String(datalayer.battery.status.cell_min_voltage_mV) + " mV / " +
-                 String(datalayer.battery.status.cell_max_voltage_mV) + " mV</h4>";
-      if (cell_delta_mv > datalayer.battery.info.max_cell_voltage_deviation_mV) {
-        content += "<h4 style='color: red;'>Cell delta: " + String(cell_delta_mv) + " mV</h4>";
-      } else {
-        content += "<h4>Cell delta: " + String(cell_delta_mv) + " mV</h4>";
-      }
-      content += "<h4>Temperature min/max: " + String(tempMinFloat, 1) + " &deg;C / " + String(tempMaxFloat, 1) +
-                 " &deg;C</h4>";
-
-      content += "<h4>System status: ";
-      switch (datalayer.battery.status.bms_status) {
-        case ACTIVE:
-          content += String("OK");
-          break;
-        case UPDATING:
-          content += String("UPDATING");
-          break;
-        case FAULT:
-          content += String("FAULT");
-          break;
-        case INACTIVE:
-          content += String("INACTIVE");
-          break;
-        case STANDBY:
-          content += String("STANDBY");
-          break;
-        default:
-          content += String("??");
-          break;
-      }
-      content += "</h4>";
-
-      if (battery && battery->supports_real_BMS_status()) {
-        content += "<h4>Battery BMS status: ";
-        switch (datalayer.battery.status.real_bms_status) {
-          case BMS_ACTIVE:
-            content += String("OK");
-            break;
-          case BMS_FAULT:
-            content += String("FAULT");
-            break;
-          case BMS_DISCONNECTED:
-            content += String("DISCONNECTED");
-            break;
-          case BMS_STANDBY:
-            content += String("STANDBY");
-            break;
-          default:
-            content += String("??");
-            break;
-        }
-        content += "</h4>";
-      }
-
-      if (datalayer.battery.status.current_dA == 0) {
-        content += "<h4>Battery idle</h4>";
-      } else if (datalayer.battery.status.current_dA < 0) {
-        content += "<h4>Battery discharging!";
-        if (datalayer.battery.settings.inverter_limits_discharge) {
-          content += " (Inverter limiting)</h4>";
-        } else {
-          if (datalayer.battery.settings.user_settings_limit_discharge) {
-            content += " (Settings limiting)</h4>";
-          } else {
-            content += " (Battery limiting)</h4>";
-          }
-        }
-        content += "</h4>";
-      } else {  // > 0 , positive current
-        content += "<h4>Battery charging!";
-        if (datalayer.battery.settings.inverter_limits_charge) {
-          content += " (Inverter limiting)</h4>";
-        } else {
-          if (datalayer.battery.settings.user_settings_limit_charge) {
-            content += " (Settings limiting)</h4>";
-          } else {
-            content += " (Battery limiting)</h4>";
-          }
-        }
-      }
-
-      // Close the block
-      content += "</div>";
-
-      if (battery2) {
-        content += "<div style='flex: 1; background-color: ";
-        switch (datalayer.battery.status.bms_status) {
-          case ACTIVE:
-            content += "#2D3F2F;";
-            break;
-          case FAULT:
-            content += "#A70107;";
-            break;
-          default:
-            content += "#2D3F2F;";
-            break;
-        }
-        // Add the common style properties
-        content += "padding: 10px; margin-bottom: 10px; border-radius: 50px;'>";
-
-        // Display battery statistics within this block
-        socRealFloat =
-            static_cast<float>(datalayer.battery2.status.real_soc) / 100.0f;  // Convert to float and divide by 100
-        //socScaledFloat; // Same value used for bat2
-        sohFloat =
-            static_cast<float>(datalayer.battery2.status.soh_pptt) / 100.0f;  // Convert to float and divide by 100
-        voltageFloat =
-            static_cast<float>(datalayer.battery2.status.voltage_dV) / 10.0f;  // Convert to float and divide by 10
-        currentFloat =
-            static_cast<float>(datalayer.battery2.status.current_dA) / 10.0f;       // Convert to float and divide by 10
-        powerFloat = static_cast<float>(datalayer.battery2.status.active_power_W);  // Convert to float
-        tempMaxFloat = static_cast<float>(datalayer.battery2.status.temperature_max_dC) / 10.0f;  // Convert to float
-        tempMinFloat = static_cast<float>(datalayer.battery2.status.temperature_min_dC) / 10.0f;  // Convert to float
-        cell_delta_mv = datalayer.battery2.status.cell_max_voltage_mV - datalayer.battery2.status.cell_min_voltage_mV;
-
-        if (datalayer.battery.settings.soc_scaling_active)
-          content += "<h4 style='color: white;'>Scaled SOC: " + String(socScaledFloat, 2) +
-                     "&percnt; (real: " + String(socRealFloat, 2) + "&percnt;)</h4>";
-        else
-          content += "<h4 style='color: white;'>SOC: " + String(socRealFloat, 2) + "&percnt;</h4>";
-
-        content += "<h4 style='color: white;'>SOH: " + String(sohFloat, 2) + "&percnt;</h4>";
-        content += "<h4 style='color: white;'>Voltage: " + String(voltageFloat, 1) +
-                   " V &nbsp; Current: " + String(currentFloat, 1) + " A</h4>";
-        content += formatPowerValue("Power", powerFloat, "", 1);
-
-        if (datalayer.battery.settings.soc_scaling_active)
-          content += "<h4 style='color: white;'>Scaled total capacity: " +
-                     formatPowerValue(datalayer.battery2.info.reported_total_capacity_Wh, "h", 1) +
-                     " (real: " + formatPowerValue(datalayer.battery2.info.total_capacity_Wh, "h", 1) + ")</h4>";
-        else
-          content += formatPowerValue("Total capacity", datalayer.battery2.info.total_capacity_Wh, "h", 1);
-
-        if (datalayer.battery.settings.soc_scaling_active)
-          content += "<h4 style='color: white;'>Scaled remaining capacity: " +
-                     formatPowerValue(datalayer.battery2.status.reported_remaining_capacity_Wh, "h", 1) +
-                     " (real: " + formatPowerValue(datalayer.battery2.status.remaining_capacity_Wh, "h", 1) + ")</h4>";
-        else
-          content += formatPowerValue("Remaining capacity", datalayer.battery2.status.remaining_capacity_Wh, "h", 1);
-
-        if (datalayer.system.info.equipment_stop_active) {
-          content +=
-              formatPowerValue("Max discharge power", datalayer.battery2.status.max_discharge_power_W, "", 1, "red");
-          content += formatPowerValue("Max charge power", datalayer.battery2.status.max_charge_power_W, "", 1, "red");
-          content +=
-              "<h4 style='color: red;'>Max discharge current: " + String(maxCurrentDischargeFloat, 1) + " A</h4>";
-          content += "<h4 style='color: red;'>Max charge current: " + String(maxCurrentChargeFloat, 1) + " A</h4>";
-        } else {
-          content += formatPowerValue("Max discharge power", datalayer.battery2.status.max_discharge_power_W, "", 1);
-          content += formatPowerValue("Max charge power", datalayer.battery2.status.max_charge_power_W, "", 1);
-          content +=
-              "<h4 style='color: white;'>Max discharge current: " + String(maxCurrentDischargeFloat, 1) + " A</h4>";
-          content += "<h4 style='color: white;'>Max charge current: " + String(maxCurrentChargeFloat, 1) + " A</h4>";
-        }
-
-        content += "<h4>Cell min/max: " + String(datalayer.battery2.status.cell_min_voltage_mV) + " mV / " +
-                   String(datalayer.battery2.status.cell_max_voltage_mV) + " mV</h4>";
-        if (cell_delta_mv > datalayer.battery2.info.max_cell_voltage_deviation_mV) {
-          content += "<h4 style='color: red;'>Cell delta: " + String(cell_delta_mv) + " mV</h4>";
-        } else {
-          content += "<h4>Cell delta: " + String(cell_delta_mv) + " mV</h4>";
-        }
-        content += "<h4>Temperature min/max: " + String(tempMinFloat, 1) + " &deg;C / " + String(tempMaxFloat, 1) +
-                   " &deg;C</h4>";
-        if (datalayer.battery.status.bms_status == ACTIVE) {
-          content += "<h4>System status: OK </h4>";
-        } else if (datalayer.battery.status.bms_status == UPDATING) {
-          content += "<h4>System status: UPDATING </h4>";
-        } else {
-          content += "<h4>System status: FAULT </h4>";
-        }
-        if (datalayer.battery2.status.current_dA == 0) {
-          content += "<h4>Battery idle</h4>";
-        } else if (datalayer.battery2.status.current_dA < 0) {
-          content += "<h4>Battery discharging!</h4>";
-        } else {  // > 0
-          content += "<h4>Battery charging!</h4>";
-        }
-        content += "</div>";
-        if (battery3) {
-          content += "<div style='flex: 1; background-color: ";
-          switch (datalayer.battery.status.bms_status) {
-            case ACTIVE:
-              content += "#2D3F2F;";
-              break;
-            case FAULT:
-              content += "#A70107;";
-              break;
-            default:
-              content += "#2D3F2F;";
-              break;
-          }
-          // Add the common style properties
-          content += "padding: 10px; margin-bottom: 10px; border-radius: 50px;'>";
-
-          // Display battery statistics within this block
-          socRealFloat =
-              static_cast<float>(datalayer.battery3.status.real_soc) / 100.0f;  // Convert to float and divide by 100
-          //socScaledFloat; // Same value used for bat2
-          sohFloat =
-              static_cast<float>(datalayer.battery3.status.soh_pptt) / 100.0f;  // Convert to float and divide by 100
-          voltageFloat =
-              static_cast<float>(datalayer.battery3.status.voltage_dV) / 10.0f;  // Convert to float and divide by 10
-          currentFloat =
-              static_cast<float>(datalayer.battery3.status.current_dA) / 10.0f;  // Convert to float and divide by 10
-          powerFloat = static_cast<float>(datalayer.battery3.status.active_power_W);                // Convert to float
-          tempMaxFloat = static_cast<float>(datalayer.battery3.status.temperature_max_dC) / 10.0f;  // Convert to float
-          tempMinFloat = static_cast<float>(datalayer.battery3.status.temperature_min_dC) / 10.0f;  // Convert to float
-          cell_delta_mv = datalayer.battery3.status.cell_max_voltage_mV - datalayer.battery3.status.cell_min_voltage_mV;
-
-          if (datalayer.battery.settings.soc_scaling_active)
-            content += "<h4 style='color: white;'>Scaled SOC: " + String(socScaledFloat, 2) +
-                       "&percnt; (real: " + String(socRealFloat, 2) + "&percnt;)</h4>";
-          else
-            content += "<h4 style='color: white;'>SOC: " + String(socRealFloat, 2) + "&percnt;</h4>";
-
-          content += "<h4 style='color: white;'>SOH: " + String(sohFloat, 2) + "&percnt;</h4>";
-          content += "<h4 style='color: white;'>Voltage: " + String(voltageFloat, 1) +
-                     " V &nbsp; Current: " + String(currentFloat, 1) + " A</h4>";
-          content += formatPowerValue("Power", powerFloat, "", 1);
-
-          if (datalayer.battery.settings.soc_scaling_active)
-            content += "<h4 style='color: white;'>Scaled total capacity: " +
-                       formatPowerValue(datalayer.battery3.info.reported_total_capacity_Wh, "h", 1) +
-                       " (real: " + formatPowerValue(datalayer.battery3.info.total_capacity_Wh, "h", 1) + ")</h4>";
-          else
-            content += formatPowerValue("Total capacity", datalayer.battery3.info.total_capacity_Wh, "h", 1);
-
-          if (datalayer.battery.settings.soc_scaling_active)
-            content += "<h4 style='color: white;'>Scaled remaining capacity: " +
-                       formatPowerValue(datalayer.battery3.status.reported_remaining_capacity_Wh, "h", 1) +
-                       " (real: " + formatPowerValue(datalayer.battery3.status.remaining_capacity_Wh, "h", 1) +
-                       ")</h4>";
-          else
-            content += formatPowerValue("Remaining capacity", datalayer.battery3.status.remaining_capacity_Wh, "h", 1);
-
-          if (datalayer.system.info.equipment_stop_active) {
-            content +=
-                formatPowerValue("Max discharge power", datalayer.battery3.status.max_discharge_power_W, "", 1, "red");
-            content += formatPowerValue("Max charge power", datalayer.battery3.status.max_charge_power_W, "", 1, "red");
-            content +=
-                "<h4 style='color: red;'>Max discharge current: " + String(maxCurrentDischargeFloat, 1) + " A</h4>";
-            content += "<h4 style='color: red;'>Max charge current: " + String(maxCurrentChargeFloat, 1) + " A</h4>";
-          } else {
-            content += formatPowerValue("Max discharge power", datalayer.battery3.status.max_discharge_power_W, "", 1);
-            content += formatPowerValue("Max charge power", datalayer.battery3.status.max_charge_power_W, "", 1);
-            content +=
-                "<h4 style='color: white;'>Max discharge current: " + String(maxCurrentDischargeFloat, 1) + " A</h4>";
-            content += "<h4 style='color: white;'>Max charge current: " + String(maxCurrentChargeFloat, 1) + " A</h4>";
-          }
-
-          content += "<h4>Cell min/max: " + String(datalayer.battery3.status.cell_min_voltage_mV) + " mV / " +
-                     String(datalayer.battery3.status.cell_max_voltage_mV) + " mV</h4>";
-          if (cell_delta_mv > datalayer.battery3.info.max_cell_voltage_deviation_mV) {
-            content += "<h4 style='color: red;'>Cell delta: " + String(cell_delta_mv) + " mV</h4>";
-          } else {
-            content += "<h4>Cell delta: " + String(cell_delta_mv) + " mV</h4>";
-          }
-          content += "<h4>Temperature min/max: " + String(tempMinFloat, 1) + " &deg;C / " + String(tempMaxFloat, 1) +
-                     " &deg;C</h4>";
-          if (datalayer.battery.status.bms_status == ACTIVE) {
-            content += "<h4>System status: OK </h4>";
-          } else if (datalayer.battery.status.bms_status == UPDATING) {
-            content += "<h4>System status: UPDATING </h4>";
-          } else {
-            content += "<h4>System status: FAULT </h4>";
-          }
-          if (datalayer.battery3.status.current_dA == 0) {
-            content += "<h4>Battery idle</h4>";
-          } else if (datalayer.battery3.status.current_dA < 0) {
-            content += "<h4>Battery discharging!</h4>";
-          } else {  // > 0
-            content += "<h4>Battery charging!</h4>";
-          }
-          content += "</div>";
-          content += "</div>";
-        }
-        content += "</div>";
-      }
-    }
-    // Block for Contactor status and component request status
-    // Start a new block with gray background color
-    content += "<div style='background-color: #333; padding: 10px; margin-bottom: 10px;border-radius: 50px'>";
-
-    if (emulator_pause_status == NORMAL) {
-      content += "<h4>Power status: " + String(get_emulator_pause_status().c_str()) + " </h4>";
-    } else {
-      content += "<h4 style='color: red;'>Power status: " + String(get_emulator_pause_status().c_str()) + " </h4>";
-    }
-
-    content += "<h4>Emulator allows contactor closing: ";
-    if (datalayer.battery.status.bms_status == FAULT) {
-      content += "<span style='color: red;'>&#10005;</span>";
-    } else {
-      content += "<span>&#10003;</span>";
-    }
-    content += " Inverter allows contactor closing: ";
-    if (datalayer.system.status.inverter_allows_contactor_closing == true) {
-      content += "<span>&#10003;</span></h4>";
-    } else {
-      content += "<span style='color: red;'>&#10005;</span></h4>";
-    }
-    if (battery2) {
-      content += "<h4>Secondary battery allowed to join ";
-      if (datalayer.system.status.battery2_allowed_contactor_closing == true) {
-        content += "<span>&#10003;</span>";
-      } else {
-        content += "<span style='color: red;'>&#10005; (voltage mismatch)</span>";
-      }
-    }
-
-    if (!contactor_control_enabled) {
-      content += "<div class=\"tooltip\">";
-      content += "<h4>Contactors not fully controlled via emulator <span style=\"color:orange\">[?]</span></h4>";
-      content +=
-          "<span class=\"tooltiptext\">This means you are either running CAN controlled contactors OR manually "
-          "powering the contactors. Battery-Emulator will have limited amount of control over the contactors!</span>";
-      content += "</div>";
-    } else {  //contactor_control_enabled TRUE
-      content += "<div class=\"tooltip\"><h4>Contactors controlled by emulator, state: ";
-      if (datalayer.system.status.contactors_engaged == 0) {
-        content += "<span style='color: red;'>OFF (DISCONNECTED)</span>";
-      } else if (datalayer.system.status.contactors_engaged == 1) {
-        content += "<span style='color: green;'>ON</span>";
-      } else if (datalayer.system.status.contactors_engaged == 2) {
-        content += "<span style='color: red;'>OFF (FAULT)</span>";
-        content += "<span class=\"tooltip-icon\"> [!]</span>";
-        content +=
-            "<span class=\"tooltiptext\">Emulator spent too much time in critical FAULT event. Investigate event "
-            "causing this via Events page. Reboot required to resume operation!</span>";
-      } else if (datalayer.system.status.contactors_engaged == 3) {
-        content += "<span style='color: orange;'>PRECHARGE</span>";
-      }
-      content += "</h4></div>";
-      if (contactor_control_enabled_double_battery && battery2) {
-        content += "<h4>Secondary battery contactor, state: ";
-        if (pwm_contactor_control) {
-          if (datalayer.system.status.contactors_battery2_engaged) {
-            content += "<span style='color: green;'>Economized</span>";
-          } else {
-            content += "<span style='color: red;'>OFF</span>";
-          }
-        } else if (
-            esp32hal->SECOND_BATTERY_CONTACTORS_PIN() !=
-            GPIO_NUM_NC) {  // No PWM_CONTACTOR_CONTROL , we can read the pin and see feedback. Helpful if channel overloaded
-          if (digitalRead(esp32hal->SECOND_BATTERY_CONTACTORS_PIN()) == HIGH) {
-            content += "<span style='color: green;'>ON</span>";
-          } else {
-            content += "<span style='color: red;'>OFF</span>";
-          }
-        }  //no PWM_CONTACTOR_CONTROL
-        content += "</h4>";
-      }
-    }
-
-    // Close the block
-    content += "</div>";
-
-    if (charger) {
-      // Start a new block with orange background color
-      content += "<div style='background-color: #FF6E00; padding: 10px; margin-bottom: 10px;border-radius: 50px'>";
-
-      content += "<h4>Charger HV Enabled: ";
-      if (datalayer.charger.charger_HV_enabled) {
-        content += "<span>&#10003;</span>";
-      } else {
-        content += "<span style='color: red;'>&#10005;</span>";
-      }
-      content += "</h4>";
-
-      content += "<h4>Charger Aux12v Enabled: ";
-      if (datalayer.charger.charger_aux12V_enabled) {
-        content += "<span>&#10003;</span>";
-      } else {
-        content += "<span style='color: red;'>&#10005;</span>";
-      }
-      content += "</h4>";
-
-      auto chgPwrDC = charger->outputPowerDC();
-      auto chgEff = charger->efficiency();
-
-      content += formatPowerValue("Charger Output Power", chgPwrDC, "", 1);
-      if (charger->efficiencySupported()) {
-        content += "<h4 style='color: white;'>Charger Efficiency: " + String(chgEff) + "%</h4>";
-      }
-
-      float HVvol = charger->HVDC_output_voltage();
-      float HVcur = charger->HVDC_output_current();
-      float LVvol = charger->LVDC_output_voltage();
-      float LVcur = charger->LVDC_output_current();
-
-      content += "<h4 style='color: white;'>Charger HVDC Output V: " + String(HVvol, 2) + " V</h4>";
-      content += "<h4 style='color: white;'>Charger HVDC Output I: " + String(HVcur, 2) + " A</h4>";
-      content += "<h4 style='color: white;'>Charger LVDC Output I: " + String(LVcur, 2) + "</h4>";
-      content += "<h4 style='color: white;'>Charger LVDC Output V: " + String(LVvol, 2) + "</h4>";
-
-      float ACcur = charger->AC_input_current();
-      float ACvol = charger->AC_input_voltage();
-
-      content += "<h4 style='color: white;'>Charger AC Input V: " + String(ACvol, 2) + " VAC</h4>";
-      content += "<h4 style='color: white;'>Charger AC Input I: " + String(ACcur, 2) + " A</h4>";
-
-      content += "</div>";
-    }
-
-    if (emulator_pause_request_ON)
-      content += "<button onclick='PauseBattery(false)'>Resume charge/discharge</button> ";
-    else
-      content +=
-          "<button onclick=\"if(confirm('Are you sure you want to pause charging and discharging? This will set the "
-          "maximum charge and discharge values to zero, preventing any further power flow.')) { PauseBattery(true); "
-          "}\">Pause charge/discharge</button> ";
-
-    content += "<button onclick='OTA()'>Perform OTA update</button> ";
-    content += "<button onclick='Settings()'>Change Settings</button> ";
-    content += "<button onclick='Advanced()'>More Battery Info</button> ";
-    content += "<button onclick='CANlog()'>CAN logger</button> ";
-    content += "<button onclick='CANreplay()'>CAN replay</button> ";
-    if (datalayer.system.info.web_logging_active || datalayer.system.info.SD_logging_active) {
-      content += "<button onclick='Log()'>Log</button> ";
-    }
-    content += "<button onclick='Cellmon()'>Cellmonitor</button> ";
-    content += "<button onclick='Events()'>Events</button> ";
-    content += "<button onclick='askReboot()'>Reboot Emulator</button>";
-    if (webserver_auth)
-      content += "<button onclick='logout()'>Logout</button>";
-    if (!datalayer.system.info.equipment_stop_active)
-      content +=
-          "<br/><button style=\"background:red;color:white;cursor:pointer;\""
-          " onclick=\""
-          "if(confirm('This action will attempt to open contactors on the battery. Are you "
-          "sure?')) { estop(true); }\""
-          ">Open Contactors</button><br/>";
-    else
-      content +=
-          "<br/><button style=\"background:green;color:white;cursor:pointer;\""
-          "20px;font-size:16px;font-weight:bold;cursor:pointer;border-radius:5px; margin:10px;"
-          " onclick=\""
-          "if(confirm('This action will attempt to close contactors and enable power transfer. Are you sure?')) { "
-          "estop(false); }\""
-          ">Close Contactors</button><br/>";
-    content += "<script>";
-    content += "function OTA() { window.location.href = '/update'; }";
-    content += "function Cellmon() { window.location.href = '/cellmonitor'; }";
-    content += "function Settings() { window.location.href = '/settings'; }";
-    content += "function Advanced() { window.location.href = '/advanced'; }";
-    content += "function CANlog() { window.location.href = '/canlog'; }";
-    content += "function CANreplay() { window.location.href = '/canreplay'; }";
-    content += "function Log() { window.location.href = '/log'; }";
-    content += "function Events() { window.location.href = '/events'; }";
-    if (webserver_auth) {
-      content += "function logout() {";
-      content += "  var xhr = new XMLHttpRequest();";
-      content += "  xhr.open('GET', '/logout', true);";
-      content += "  xhr.send();";
-      content += "  setTimeout(function(){ window.open(\"/\",\"_self\"); }, 1000);";
-      content += "}";
-    }
-    content += "function PauseBattery(pause){";
-    content +=
-        "var xhr=new "
-        "XMLHttpRequest();xhr.onload=function() { "
-        "window.location.reload();};xhr.open('GET','/pause?value='+pause,true);xhr.send();";
-    content += "}";
-    content += "function estop(stop){";
-    content +=
-        "var xhr=new "
-        "XMLHttpRequest();xhr.onload=function() { "
-        "window.location.reload();};xhr.open('GET','/equipmentStop?value='+stop,true);xhr.send();";
-    content += "}";
-    content += "</script>";
-
-    //Script for refreshing page
-    content += "<script>";
-    content += "setTimeout(function(){ location.reload(true); }, 15000);";
-    content += "</script>";
-
-    return content;
-  }
-  return String();
 }
 
 void onOTAStart() {
