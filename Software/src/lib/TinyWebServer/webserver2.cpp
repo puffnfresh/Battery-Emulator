@@ -353,7 +353,7 @@ public:
 };
 
 
-TwsRoute settingsHandler("/api/settings", new TwsJsonGetFunc([](TwsRequest& request, JsonDocument& doc) {
+TwsRoute settingsHandler("/api/internal/settings", new TwsJsonGetFunc([](TwsRequest& request, JsonDocument& doc) {
     BatteryEmulatorSettingsStore settings;
 
     JsonArray bats = doc["batteries"].to<JsonArray>();
