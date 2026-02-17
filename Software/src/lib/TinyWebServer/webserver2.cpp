@@ -7,9 +7,7 @@
 #include <src/devboard/hal/hal.h>
 #include <src/devboard/safety/safety.h>
 #include <src/devboard/utils/millis64.h>
-#include <src/devboard/webserver/index_html.h>
 #include <src/inverter/INVERTERS.h>
-#include <src/lib/ayushsharma82-ElegantOTA/src/elop.h>
 #include <src/lib/bblanchon-ArduinoJson/ArduinoJson.h>
 
 #include "esp_task_wdt.h"
@@ -125,7 +123,23 @@ TwsRoute eOtaUploadHandler("/ota/upload",
 OtaUpload eOtaUpload(&eOtaUploadHandler);
 
 extern const char* version_number;
-const char common_javascript[] = COMMON_JAVASCRIPT;
+const char common_javascript[] = R"rawliteral(
+<script>
+function askReboot() {
+  if (window.confirm('Are you sure you want to reboot the emulator? NOTE: If emulator is handling contactors, they will open during reboot!')) {
+    reboot();
+  }
+}
+function reboot() {
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', '/reboot', true);
+  xhr.send();
+  setTimeout(function() {
+    window.location = "/";
+  }, 3000);
+}
+</script>
+)rawliteral";
 
 #include "frontend.h"
 const char* HTTP_RESPONSE_GZIP = "HTTP/1.1 200 OK\r\n"
